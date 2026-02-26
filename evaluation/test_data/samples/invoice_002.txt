@@ -1,0 +1,7 @@
+Tech Solutions SARL
+FACTURE N° FA-2024-002
+Date: 20/02/2024
+Client: Entreprise XYZ
+Total HT: 5000,00€
+TVA 20%: 1000,00€
+Total TTC: 6000,00€

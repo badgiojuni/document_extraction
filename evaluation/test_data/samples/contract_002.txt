@@ -1,0 +1,7 @@
+CONTRAT DE TRAVAIL
+Employeur: Société ABC
+Salarié: Jean Martin
+Signature: 15/06/2024
+Prise de poste: 01/07/2024
+Salaire annuel: 45000€
+Type: CDI

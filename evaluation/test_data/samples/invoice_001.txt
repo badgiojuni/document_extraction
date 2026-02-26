@@ -1,0 +1,7 @@
+ACME Corporation
+FACTURE N° FA-2024-001
+Date: 15/01/2024
+Client: Client ABC
+Total HT: 1000,00€
+TVA 20%: 200,00€
+Total TTC: 1200,00€
