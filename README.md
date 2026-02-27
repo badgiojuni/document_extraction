@@ -1,129 +1,255 @@
-# Document Extraction POC
+# PDF Extractor
 
-POC d'extraction de données depuis des documents (factures, contrats) utilisant OCR et LLM.
+Extraction d'informations depuis des documents PDF à structure variée via un Vision LLM (Gemini) sur Vertex AI.
 
-## Fonctionnalités
+## Architecture
 
-- **Extraction de factures** : numéro, date, montants (HT/TTC), fournisseur, client, lignes de détail
-- **Extraction de contrats** : parties, dates, montants, clauses importantes
-- **Interface Streamlit** : upload, visualisation, export JSON/CSV
-- **Pipeline modulaire** : preprocessing, OCR (Tesseract), LLM (Vertex AI)
-- **Évaluation** : métriques de performance, rapport HTML
+```
+PDF → [PyMuPDF] → Images PNG → [Vertex AI Gemini] → Texte/JSON
+```
 
-## Prérequis
+Les VLLM comme Gemini ne lisent pas directement les PDF. Le processus convertit chaque page en image, puis envoie ces images au modèle avec un prompt d'extraction.
 
-- Python 3.10+
-- [uv](https://github.com/astral-sh/uv) (gestionnaire de paquets)
-- Tesseract OCR installé sur le système
-- (Optionnel) Compte Google Cloud avec Vertex AI activé
+## Structure du projet
 
-### Installation de Tesseract
-
-```bash
-# Ubuntu/Debian
-sudo apt-get install tesseract-ocr tesseract-ocr-fra
-
-# macOS
-brew install tesseract tesseract-lang
-
-# Windows
-# Télécharger depuis https://github.com/UB-Mannheim/tesseract/wiki
+```
+pdf-extractor/
+├── main.py                      # CLI pour extraire depuis un PDF
+├── pyproject.toml               # Dépendances
+└── src/pdf_extractor/
+    ├── __init__.py
+    ├── client.py                # Client Vertex AI (Gemini Vision)
+    └── extractor.py             # Conversion PDF → images + extraction
 ```
 
 ## Installation
 
 ```bash
-# Cloner le projet
-git clone <repo-url>
-cd document_extraction
-
-# Créer l'environnement et installer les dépendances
+# Cloner et installer
 uv sync
 
-# Copier et configurer le fichier de configuration
-cp config.example.yaml config.yaml
-# Éditer config.yaml avec vos paramètres
+# Authentification GCP
+gcloud auth application-default login
 ```
 
-## Configuration
+## Composants
 
-Éditer `config.yaml` :
+### 1. VertexAIClient (`client.py`)
 
-```yaml
-vertex_ai:
-  project_id: "your-gcp-project-id"
-  location: "europe-west1"
-  use_mock: false  # true pour tester sans credentials GCP
+Encapsule la communication avec Vertex AI.
 
-ocr:
-  tesseract:
-    lang: "fra"  # ou "eng" ou "fra+eng"
+```python
+class VertexAIClient:
+    def __init__(self, project_id, location="europe-west1", model_name="gemini-2.0-flash-001"):
+        vertexai.init(project=project_id, location=location)
+        self.model = GenerativeModel(model_name)
 ```
+
+- `vertexai.init()` initialise le SDK avec les credentials GCP
+- `GenerativeModel` charge le modèle Gemini (vision-capable)
+- `europe-west1` : région par défaut pour la latence en Europe
+
+#### Méthode `extract_from_images`
+
+```python
+def extract_from_images(self, images: list[bytes], prompt: str) -> str:
+    parts = []
+    for img_bytes in images:
+        parts.append(Part.from_data(img_bytes, mime_type="image/png"))
+    parts.append(prompt)
+    response = self.model.generate_content(parts)
+    return response.text
+```
+
+- Construit une requête **multimodale** : images + texte
+- `Part.from_data()` encode chaque image comme partie de la requête
+- Le prompt est ajouté **après** les images (le modèle "voit" d'abord les images, puis lit l'instruction)
+
+### 2. PDFExtractor (`extractor.py`)
+
+Convertit les PDF en images et orchestre l'extraction.
+
+```python
+class PDFExtractor:
+    def __init__(self, client: VertexAIClient, dpi: int = 150):
+```
+
+- `dpi=150` : résolution de rendu. Bon compromis qualité/taille. Augmenter à 200-300 pour des documents avec petit texte.
+
+#### Méthode `pdf_to_images`
+
+```python
+def pdf_to_images(self, pdf_path: Path) -> list[bytes]:
+    doc = fitz.open(pdf_path)
+    for page in doc:
+        mat = fitz.Matrix(self.dpi / 72, self.dpi / 72)
+        pix = page.get_pixmap(matrix=mat)
+        images.append(pix.tobytes("png"))
+```
+
+- `fitz` = PyMuPDF (nom historique de la bibliothèque)
+- `Matrix(dpi/72, dpi/72)` : facteur de zoom. PDF standard = 72 DPI, donc `150/72 ≈ 2x`
+- `get_pixmap()` : rasterise la page en image
+- `tobytes("png")` : encode en PNG (sans perte, adapté au texte)
+
+#### Méthode `extract`
+
+```python
+def extract(self, pdf_path, prompt, pages=None) -> str:
+```
+
+- Extraction "libre" : prompt personnalisé, réponse en texte
+- `pages` : limite aux pages spécifiées (économise tokens et coûts)
+
+#### Méthode `extract_structured`
+
+```python
+def extract_structured(self, pdf_path, schema, pages=None) -> dict:
+```
+
+- Extraction structurée : schéma JSON en entrée, dictionnaire en sortie
+- Le prompt force le modèle à répondre uniquement en JSON valide
+- Nettoyage automatique des marqueurs markdown (` ```json ``` `)
+
+### 3. CLI (`main.py`)
+
+| Argument | Description |
+|----------|-------------|
+| `pdf` | Fichier PDF à traiter (obligatoire) |
+| `--prompt, -p` | Instructions d'extraction libre |
+| `--schema, -s` | Fichier JSON pour extraction structurée |
+| `--project` | ID projet GCP (ou variable `GOOGLE_CLOUD_PROJECT`) |
+| `--location` | Région Vertex AI (défaut: `europe-west1`) |
+| `--pages` | Pages à traiter : `0,1,2` ou `0-5` |
 
 ## Utilisation
 
-### Interface Streamlit
+### Prérequis
 
 ```bash
-uv run streamlit run app/main.py
+# Définir le projet GCP
+export GOOGLE_CLOUD_PROJECT="mon-projet-gcp"
+
+# Ou passer via --project à chaque appel
 ```
 
-### Ligne de commande
+### Extraction libre
 
 ```bash
-# Extraire un document
-uv run extract --input document.pdf --type invoice --output result.json
+# Extraction par défaut (toutes infos importantes)
+python main.py facture.pdf
 
-# Évaluer les performances
-uv run evaluate --data evaluation/test_data
+# Extraction avec prompt personnalisé
+python main.py facture.pdf -p "Extrait le nom du client, la date et le montant total TTC"
+
+# Limiter aux 2 premières pages
+python main.py rapport.pdf -p "Résume ce document" --pages 0,1
 ```
 
-### Notebook
+### Extraction structurée
+
+Créer un fichier `schema.json` :
+
+```json
+{
+  "numero_facture": "string",
+  "date": "string (format JJ/MM/AAAA)",
+  "client": {
+    "nom": "string",
+    "adresse": "string"
+  },
+  "lignes": [
+    {
+      "description": "string",
+      "quantite": "number",
+      "prix_unitaire": "number"
+    }
+  ],
+  "total_ht": "number",
+  "tva": "number",
+  "total_ttc": "number"
+}
+```
 
 ```bash
-uv run jupyter notebook notebooks/
+python main.py facture.pdf -s schema.json
 ```
 
-## Structure du projet
+Sortie :
 
-```
-document_extraction/
-├── src/document_extraction/    # Code source principal
-│   ├── preprocessing/          # Conversion PDF, amélioration images
-│   ├── ocr/                    # Extraction texte (Tesseract)
-│   ├── llm/                    # Client Vertex AI, extracteurs
-│   └── models/                 # Modèles de données Pydantic
-├── app/                        # Application Streamlit
-├── evaluation/                 # Scripts d'évaluation
-├── notebooks/                  # Notebooks pédagogiques
-└── tests/                      # Tests unitaires
-```
-
-## Architecture
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐     ┌──────────────┐
-│   Document  │────▶│ Preprocessing│────▶│     OCR     │────▶│     LLM      │
-│  (PDF/IMG)  │     │              │     │ (Tesseract) │     │ (Vertex AI)  │
-└─────────────┘     └──────────────┘     └─────────────┘     └──────────────┘
-                           │                    │                    │
-                           ▼                    ▼                    ▼
-                    ┌─────────────┐     ┌─────────────┐     ┌──────────────┐
-                    │   Images    │     │  Texte brut │     │   Données    │
-                    │ optimisées  │     │             │     │  structurées │
-                    └─────────────┘     └─────────────┘     └──────────────┘
+```json
+{
+  "numero_facture": "FAC-2024-001234",
+  "date": "15/03/2024",
+  "client": {
+    "nom": "Entreprise ABC",
+    "adresse": "123 rue Example, 75001 Paris"
+  },
+  "lignes": [
+    {
+      "description": "Prestation de conseil",
+      "quantite": 5,
+      "prix_unitaire": 500.00
+    }
+  ],
+  "total_ht": 2500.00,
+  "tva": 500.00,
+  "total_ttc": 3000.00
+}
 ```
 
-## Tests
+### Utilisation programmatique
 
-```bash
-# Lancer les tests
-uv run pytest
+```python
+from src.pdf_extractor import PDFExtractor, VertexAIClient
 
-# Avec couverture
-uv run pytest --cov=src/document_extraction --cov-report=html
+# Initialisation
+client = VertexAIClient(project_id="mon-projet-gcp")
+extractor = PDFExtractor(client, dpi=200)
+
+# Extraction libre
+texte = extractor.extract("document.pdf", "Liste tous les noms de personnes mentionnées")
+
+# Extraction structurée
+schema = {
+    "titre": "string",
+    "auteur": "string",
+    "date_publication": "string"
+}
+data = extractor.extract_structured("article.pdf", schema, pages=[0])
 ```
 
-## Licence
+## Flux de données
 
-MIT
+```
+1. main.py reçoit : document.pdf + prompt
+2. PDFExtractor.extract() appelé
+3. pdf_to_images() convertit chaque page en PNG (bytes)
+4. VertexAIClient.extract_from_images() envoie à Gemini :
+   [Image1, Image2, ..., "Extrait le nom et l'adresse"]
+5. Gemini analyse visuellement et répond
+6. Réponse affichée (texte ou JSON parsé)
+```
+
+## Configuration avancée
+
+### Changer de modèle
+
+```python
+client = VertexAIClient(
+    project_id="mon-projet",
+    model_name="gemini-1.5-pro-001"  # Plus puissant, plus lent
+)
+```
+
+### Ajuster la résolution
+
+```python
+extractor = PDFExtractor(client, dpi=300)  # Meilleure qualité pour petit texte
+```
+
+## Limites
+
+- Coût API proportionnel au nombre de pages et à la résolution
+- Documents très longs (>50 pages) peuvent dépasser les limites de contexte
+- La qualité d'extraction dépend de la lisibilité du PDF (scans de mauvaise qualité = résultats dégradés)

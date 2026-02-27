@@ -1,7 +1,0 @@
-Services Plus
-Facture 2024-INV-003
-Le 10/03/2024
-Destinataire: PME Dupont
-Montant HT: 2500€
-TVA: 500€
-Net à payer TTC: 3000€
