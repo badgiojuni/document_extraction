@@ -96,3 +96,6 @@ notebooks/
 
 # Fichiers de configuration claude
 .claude/
+
+#donnees
+data

@@ -8,6 +8,10 @@ from pathlib import Path
 
 from src.pdf_extractor import PDFExtractor, VertexAIClient
 
+from dotenv import load_dotenv
+
+# 1. Charger les variables d'abord !
+load_dotenv()
 
 def main():
     parser = argparse.ArgumentParser(description="Extraction d'informations depuis PDF")
@@ -66,10 +70,11 @@ def main():
     if args.schema:
         schema = json.loads(args.schema.read_text())
         result = extractor.extract_structured(args.pdf, schema, pages)
-        print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
         result = extractor.extract(args.pdf, args.prompt, pages)
-        print(result)
+
+    print(json.dumps(result, indent=2, ensure_ascii=False))
+    print(f"\nRésultat sauvegardé dans: {result['output_file']}")
 
     return 0
 
